@@ -263,7 +263,7 @@ class CoreRegressionTests(unittest.TestCase):
                     raise OSError('locked')
                 return real_remove(path)
 
-            with patch('barcode_image_mover_exe.os.remove', side_effect=remove_with_old_file_failure):
+            with patch('app.core.image_processor.os.remove', side_effect=remove_with_old_file_failure):
                 result = app._process_main_image(main_dir, src_name, force_format='jpg')
 
             self.assertTrue(result.ok)
@@ -301,7 +301,7 @@ class CoreRegressionTests(unittest.TestCase):
                 original_bytes = f.read()
             source_lookup = app.build_manual_source_lookup(source_dir, [src_name])
 
-            with patch('barcode_image_mover_exe.MAIN_IMAGE_MAX_BYTES', 1):
+            with patch('app.core.image_processor.MAIN_IMAGE_MAX_BYTES', 1):
                 result = app._process_main_image(
                     main_dir, src_name, manual_dir=manual_dir, manual_source_lookup=source_lookup
                 )
@@ -328,7 +328,7 @@ class CoreRegressionTests(unittest.TestCase):
             Image.effect_noise((600, 600), 100).convert('RGB').save(work_path, 'PNG')
             source_lookup = app.build_manual_source_lookup(source_dir, [src_name])
 
-            with patch('barcode_image_mover_exe.MAIN_IMAGE_MAX_BYTES', 20_000):
+            with patch('app.core.image_processor.MAIN_IMAGE_MAX_BYTES', 20_000):
                 result = app._process_main_image(
                     main_dir, src_name, force_format='png',
                     manual_dir=manual_dir, manual_source_lookup=source_lookup
@@ -358,7 +358,7 @@ class CoreRegressionTests(unittest.TestCase):
                 original_bytes = f.read()
             source_lookup = app.build_manual_source_lookup(source_dir, [source_name], clean_detail_name=True)
 
-            with patch('barcode_image_mover_exe.DETAIL_IMAGE_MAX_BYTES', 1):
+            with patch('app.core.image_processor.DETAIL_IMAGE_MAX_BYTES', 1):
                 result = app._process_detail_image(
                     detail_dir, work_name, manual_dir=manual_dir, manual_source_lookup=source_lookup
                 )
@@ -385,7 +385,7 @@ class CoreRegressionTests(unittest.TestCase):
             Image.effect_noise((600, 600), 100).convert('RGB').save(work_path, 'PNG')
             source_lookup = app.build_manual_source_lookup(source_dir, [src_name])
 
-            with patch('barcode_image_mover_exe.DETAIL_IMAGE_MAX_BYTES', 20_000):
+            with patch('app.core.image_processor.DETAIL_IMAGE_MAX_BYTES', 20_000):
                 result = app._process_detail_image(
                     detail_dir, src_name, force_format=None,
                     manual_dir=manual_dir, manual_source_lookup=source_lookup
