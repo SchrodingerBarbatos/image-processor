@@ -9,6 +9,7 @@ from unittest.mock import patch
 from PIL import Image
 
 import barcode_image_mover_exe as app
+from app.core import file_ops
 
 
 class MemoryLog:
@@ -130,11 +131,11 @@ class CoreRegressionTests(unittest.TestCase):
                 app.get_unique_path(os.path.join(output, 'reserved.jpg'), reserve=True)
                 raise RuntimeError('boom')
 
-            with patch('barcode_image_mover_exe.step1_detail', side_effect=reserve_then_fail):
+            with patch('app.core.pipeline.step1_detail', side_effect=reserve_then_fail):
                 with redirect_stdout(StringIO()):
                     app.run_all(source, output, mode=4)
 
-        self.assertEqual(app._RESERVED_OUTPUT_PATHS, set())
+        self.assertEqual(file_ops._RESERVED_OUTPUT_PATHS, set())
 
     def test_copy_files_parallel_counts_completed_files_after_stop(self):
         with tempfile.TemporaryDirectory() as tmp:
