@@ -15,26 +15,27 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer, QSize, QRectF
 from PySide6.QtGui import (
     QTextCursor, QTextCharFormat, QColor, QFont, QIcon, QPixmap,
-    QPalette, QPainter, QLinearGradient, QPainterPath,
 )
 import winsound
 
 from app.constants import (
     DEBOUNCE_MS, LOG_MAX_BLOCK_COUNT, MODE_HELP_TEXT, RESIZE_MODE_MAP, UI_HELP_TEXT,
 )
-from app.services.icons import _darken, _write_temp_svg, _TEMP_ICON_PATHS, _cleanup_temp_icons
+from app.services.icons import _write_temp_svg, _TEMP_ICON_PATHS, _cleanup_temp_icons
 from app.core.file_ops import validate_output_dir, suggest_output_dir
 from app.core.pipeline import run_all
 from app.core.excel_reader import read_excel_preview
 from app.ui.widgets import EmittingStream, DragLineEdit, RoundComboBox, AnimatedProgressBar
 from app.ui.workers import WorkerThread, ExcelHeaderWorker
+from app.ui.styles import get_theme_colors, build_stylesheet
+from app.ui.dialogs import question_box, info_box
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("图片处理工具")
         self.resize(1000, 680)
-        self._colors = self._theme_colors()
+        self._colors = get_theme_colors()
 
         self.stop_event = threading.Event()
         self.worker = None
@@ -107,72 +108,6 @@ class MainWindow(QMainWindow):
         self.le_start.setStyleSheet(style)
         self.le_end.setStyleSheet(style)
 
-    def _theme_colors(self):
-        """根据系统调色板生成浅色/暗色可读配色。"""
-        app = QApplication.instance()
-        is_dark = False
-        if app:
-            is_dark = app.palette().color(QPalette.ColorRole.Window).lightness() < 128
-        if sys.platform == 'win32':
-            try:
-                import winreg
-                with winreg.OpenKey(
-                    winreg.HKEY_CURRENT_USER,
-                    r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
-                ) as key:
-                    is_dark = winreg.QueryValueEx(key, "AppsUseLightTheme")[0] == 0
-            except Exception:
-                pass
-        if is_dark:
-            return {
-                'window': '#111827',
-                'card': '#1F2937',
-                'card2': '#263244',
-                'border': '#374151',
-                'text': '#F3F4F6',
-                'muted': '#AAB2BD',
-                'input': '#111827',
-                'input_border': '#6B7280',
-                'accent': '#60A5FA',
-                'accent_hover': '#3B82F6',
-                'green': '#16A34A',
-                'green_hover': '#15803D',
-                'red': '#EF4444',
-                'red_hover': '#DC2626',
-                'log': '#0B1220',
-                'help': '#152219',
-                'tip': '#2A2112',
-                'tip_text': '#FBBF24',
-                'tip_border': '#D97706',
-                'disabled_card': '#161E2A',
-                'disabled_border': '#374151',
-                'shadow': QColor(0, 0, 0, 45),
-            }
-        return {
-            'window': '#F6F8FB',
-            'card': '#FFFFFF',
-            'card2': '#F8FAFD',
-            'border': '#E4E8EF',
-            'text': '#111827',
-            'muted': '#6B7280',
-            'input': '#FFFFFF',
-            'input_border': '#D7DDE7',
-            'accent': '#0078D4',
-            'accent_hover': '#106EBE',
-            'green': '#0EA348',
-            'green_hover': '#098A37',
-            'red': '#FF2D30',
-            'red_hover': '#E52225',
-            'log': '#FFFFFF',
-            'help': '#F4FBF5',
-            'tip': '#FFF8E8',
-            'tip_text': '#B45309',
-            'tip_border': '#F5C16C',
-            'disabled_card': '#F0F3F8',
-            'disabled_border': '#D6DCE7',
-            'shadow': QColor(15, 23, 42, 18),
-        }
-
     def _apply_app_style(self):
         c = self._colors
         # Qt QSS 不支持 data URI，需要把图标写到临时文件再引用
@@ -237,325 +172,7 @@ class MainWindow(QMainWindow):
         # 更新 DragLineEdit 的拖拽高亮颜色，跟随主题
         DragLineEdit._accent_color = c['accent']
 
-        self.setStyleSheet(f"""
-            QMainWindow, QWidget {{
-                background: {c['window']};
-                color: {c['text']};
-            }}
-            QFrame#CardFrame {{
-                background: {c['card']};
-                border: 1px solid {c['border']};
-                border-radius: 8px;
-            }}
-            QLabel {{
-                color: {c['text']};
-                background: transparent;
-            }}
-            QLabel:disabled {{
-                color: {c['muted']};
-            }}
-            QToolTip {{
-                background: {c['card']};
-                color: {c['text']};
-                border: 1px solid {c['border']};
-                border-radius: 4px;
-                padding: 4px 8px;
-            }}
-            QLabel#sectionTitle {{
-                color: {c['text']};
-                background: transparent;
-                font-size: 11pt;
-                font-weight: 700;
-                padding: 0 0 8px 0;
-                border-bottom: 1px solid {c['border']};
-            }}
-            QLabel#hintLabel {{
-                color: {c['muted']};
-                font-size: 9pt;
-            }}
-            QLabel#fieldLabel {{
-                font-size: 11pt;
-                font-weight: 600;
-            }}
-            QLineEdit {{
-                background: {c['input']};
-                color: {c['text']};
-                border: 2px solid {c['input_border']};
-                border-radius: 6px;
-                min-height: 34px;
-                max-height: 34px;
-                padding: 0px 9px;
-            }}
-            QComboBox {{
-                background: {c['input']};
-                color: {c['text']};
-                border: 2px solid {c['input_border']};
-                border-radius: 6px;
-                min-height: 34px;
-                max-height: 34px;
-                padding: 0px 25px 0px 9px;
-            }}
-            QLineEdit:focus, QComboBox:focus {{
-                border-color: {c['accent']};
-            }}
-            QLineEdit:hover, QComboBox:hover {{
-                border-color: {c['accent']};
-            }}
-            QLineEdit:disabled, QComboBox:disabled {{
-                color: {c['muted']};
-                background: {c['card2']};
-                border-color: {c['border']};
-            }}
-            QComboBox::drop-down {{
-                subcontrol-origin: padding;
-                subcontrol-position: top right;
-                right: 10px;
-                width: 14px;
-                border: none;
-                background: transparent;
-            }}
-            QComboBox::down-arrow {{
-                image: url({arrow_ico});
-                width: 10px;
-                height: 7px;
-            }}
-            QListView#roundComboView {{
-                background: {c['input']};
-                color: {c['text']};
-                border: 1px solid {c['input_border']};
-                border-radius: 8px;
-                outline: none;
-                padding: 4px;
-            }}
-            QListView#roundComboView::item {{
-                min-height: 26px;
-                margin: 2px 4px;
-                padding: 2px 8px;
-                border-radius: 6px;
-            }}
-            QListView#roundComboView::item:selected {{
-                background: {c['accent']};
-                color: #FFFFFF;
-            }}
-            QPushButton {{
-                background: {c['card2']};
-                color: {c['text']};
-                border: 2px solid {c['border']};
-                border-radius: 7px;
-                min-height: 34px;
-                max-height: 34px;
-                padding: 0px 11px;
-            }}
-            QPushButton:hover {{
-                border-color: {c['accent']};
-                background: {c['input']};
-            }}
-            QPushButton:pressed {{
-                background: {c['border']};
-                border-color: {c['muted']};
-            }}
-            QPushButton:disabled {{
-                color: {c['muted']};
-                background: {c['card2']};
-                border-color: {c['border']};
-            }}
-            QPushButton#startButton {{
-                background: {c['green']};
-                border-color: {c['green_hover']};
-                color: white;
-                font-size: 13pt;
-                font-weight: 800;
-                min-height: 46px;
-                max-height: 46px;
-                border-radius: 8px;
-                padding: 0px 16px;
-            }}
-            QPushButton#startButton:hover {{
-                background: {c['green_hover']};
-            }}
-            QPushButton#startButton:pressed {{
-                background: {_darken(c['green_hover'], 0.8)};
-            }}
-            QPushButton#startButton:disabled {{
-                background: {c['card2']};
-                border-color: {c['border']};
-                color: {c['muted']};
-            }}
-            QPushButton#stopButton {{
-                background: {c['red']};
-                border-color: {c['red_hover']};
-                color: white;
-                font-size: 13pt;
-                font-weight: 800;
-                min-height: 46px;
-                max-height: 46px;
-                border-radius: 8px;
-                padding: 0px 16px;
-            }}
-            QPushButton#stopButton:hover {{
-                background: {c['red_hover']};
-            }}
-            QPushButton#stopButton:pressed {{
-                background: {_darken(c['red_hover'], 0.8)};
-            }}
-            QPushButton#stopButton:disabled {{
-                background: {c['card2']};
-                border-color: {c['border']};
-                color: {c['muted']};
-            }}
-            QPushButton#logToolButton {{
-                min-height: 34px;
-                max-height: 34px;
-                padding: 0px 12px;
-            }}
-            QTextEdit {{
-                background: {c['log']};
-                color: {c['text']};
-                border: 1px solid {c['border']};
-                border-radius: 8px;
-                padding: 10px;
-                font-family: Consolas, "Courier New", monospace;
-                font-size: 10pt;
-            }}
-            QTextEdit#helpText {{
-                background: transparent;
-                border: none;
-            }}
-            QFrame#helpContainer {{
-                background: {c['card2']};
-                border: 1px solid {c['border']};
-                border-radius: 8px;
-            }}
-            QTabWidget#helpTabs::pane {{
-                border: none;
-                background: transparent;
-                margin-top: 0px;
-            }}
-            QTabWidget#helpTabs QWidget {{
-                background: transparent;
-            }}
-            QTabWidget#helpTabs QTabBar {{
-                background: transparent;
-            }}
-            QTabWidget#helpTabs QTabBar::tab {{
-                background: {c['card2']};
-                border: 1px solid {c['border']};
-                color: {c['muted']};
-                padding: 7px 12px;
-                min-width: 84px;
-                font-weight: 600;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
-                border-bottom-left-radius: 0px;
-                border-bottom-right-radius: 0px;
-                margin-right: 0px;
-                margin-bottom: 0px;
-            }}
-            QTabWidget#helpTabs QTabBar::tab:selected {{
-                background: {c['card']};
-                color: {c['text']};
-                border-color: {c['input_border']};
-                border-bottom-color: {c['card']};
-                margin-bottom: -1px;
-            }}
-            QFrame#helpTabCard {{
-                background: {c['card']};
-                border: 1px solid {c['input_border']};
-                border-top: none;
-                border-top-left-radius: 0px;
-                border-top-right-radius: 0px;
-                border-bottom-left-radius: 8px;
-                border-bottom-right-radius: 8px;
-            }}
-            QTextEdit#helpTabText {{
-                background: {c['card']};
-                border: none;
-                padding: 10px;
-            }}
-            QFrame#modeHelpBox {{
-                background: {c['help']};
-                border: 1px solid {c['border']};
-                border-radius: 8px;
-            }}
-            QLabel#modeHelpText {{
-                color: {c['green']};
-                background: transparent;
-            }}
-            QFrame#tipBox {{
-                background: {c['tip']};
-                border: 1px solid {c['tip_border']};
-                border-radius: 8px;
-            }}
-            QLabel#tipText {{
-                color: {c['tip_text']};
-                background: transparent;
-            }}
-            QProgressBar {{
-                background: {c['border']};
-                color: {c['text']};
-                border: none;
-                border-radius: 8px;
-                min-height: 20px;
-                text-align: center;
-                font-weight: 700;
-            }}
-            QProgressBar::chunk {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {c['green']}, stop:1 {_darken(c['green'], 0.78)});
-                border-radius: 8px;
-            }}
-            QCheckBox {{
-                color: {c['text']};
-                background: transparent;
-                spacing: 8px;
-                min-height: 40px;
-                max-height: 40px;
-            }}
-            QCheckBox::indicator {{
-                width: 20px;
-                height: 20px;
-                border: none;
-                background: transparent;
-            }}
-            QCheckBox::indicator:unchecked {{
-                {checkbox_unchecked_css}
-            }}
-            QCheckBox::indicator:checked {{
-                {checkbox_checked_css}
-            }}
-            QScrollBar:vertical {{
-                background: transparent;
-                width: 10px;
-                margin: 4px 2px 4px 2px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {c['input_border']};
-                border-radius: 5px;
-                min-height: 28px;
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background: {c['muted']};
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                height: 0px;
-            }}
-            QScrollBar:horizontal {{
-                background: transparent;
-                height: 10px;
-                margin: 2px 4px 2px 4px;
-            }}
-            QScrollBar::handle:horizontal {{
-                background: {c['input_border']};
-                border-radius: 5px;
-                min-width: 28px;
-            }}
-            QScrollBar::handle:horizontal:hover {{
-                background: {c['muted']};
-            }}
-            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
-                width: 0px;
-            }}
-        """)
+        self.setStyleSheet(build_stylesheet(self._colors, checkbox_checked_css, checkbox_unchecked_css, arrow_ico))
 
     def _add_shadow(self, widget, blur=14, y=3):
         effect = QGraphicsDropShadowEffect(widget)
@@ -993,31 +610,6 @@ class MainWindow(QMainWindow):
             self.btn_stop.setIcon(QIcon(self._stop_ico_path))
             self.btn_stop.setIconSize(QSize(18, 18))
 
-    def _center_message_box(self, box):
-        box.adjustSize()
-        center = self.frameGeometry().center()
-        box.move(center.x() - box.width() // 2, center.y() - box.height() // 2)
-
-    def _question_box(self, title, text):
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Icon.Question)
-        box.setWindowTitle(title)
-        box.setText(text)
-        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        box.setDefaultButton(QMessageBox.StandardButton.No)
-        self._center_message_box(box)
-        return box.exec()
-
-    def _info_box(self, title, text):
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Icon.Information)
-        box.setWindowTitle(title)
-        box.setText(text)
-        box.setStandardButtons(QMessageBox.StandardButton.Ok)
-        box.setDefaultButton(QMessageBox.StandardButton.Ok)
-        self._center_message_box(box)
-        return box.exec()
-
     def _clear_log(self):
         self.text_log.clear()
         self.progress_bar.setValue(0)
@@ -1035,7 +627,7 @@ class MainWindow(QMainWindow):
         try:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(self.text_log.toPlainText())
-            self._info_box("导出完成", f"日志已导出到:\n{path}")
+            info_box(self, "导出完成", f"日志已导出到:\n{path}")
         except Exception as e:
             QMessageBox.warning(self, "导出失败", f"无法导出日志:\n{e}")
 
@@ -1315,7 +907,7 @@ class MainWindow(QMainWindow):
 
     def stop_process(self):
         if self.worker and self.worker.isRunning():
-            reply = self._question_box("确认停止", "当前任务正在处理图片。\n\n确定要停止当前任务吗？")
+            reply = question_box(self, "确认停止", "当前任务正在处理图片。\n\n确定要停止当前任务吗？")
             if reply != QMessageBox.StandardButton.Yes:
                 return
             print("\n>>> 正在发送停止信号，请稍等...")
@@ -1351,7 +943,7 @@ class MainWindow(QMainWindow):
                 QApplication.beep()
             if hasattr(self, 'chk_open_output') and self.chk_open_output.isChecked():
                 self._open_output_dir()
-            self._info_box("处理完成", "全部处理完成！\n\n请在输出目录查看处理结果。")
+            info_box(self, "处理完成", "全部处理完成！\n\n请在输出目录查看处理结果。")
 
     def _restore_stdout(self):
         if getattr(self, '_stdout_stream', None) is not None and sys.stdout is self._stdout_stream:
@@ -1394,9 +986,3 @@ class MainWindow(QMainWindow):
             self._restore_stdout()
             event.accept()
 
-
-# ============================================================
-# 入口
-# ============================================================
-
-# 嵌入的 ICO 图标（base64 编码）

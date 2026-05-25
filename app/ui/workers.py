@@ -5,6 +5,7 @@ from PySide6.QtCore import QThread, Signal
 from app.core.pipeline import run_all
 from app.core.excel_reader import read_excel_preview
 
+
 class WorkerThread(QThread):
     """后台工作线程"""
     finished_signal = Signal()

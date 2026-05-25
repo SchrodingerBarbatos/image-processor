@@ -7,6 +7,7 @@ import shutil
 import uuid
 import threading
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from PIL import Image
 
 from app.constants import (
     IMAGE_EXTS, COPY_WORKERS, PROGRESS_REPORT_FRACTION,
