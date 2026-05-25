@@ -153,8 +153,8 @@ class CoreRegressionTests(unittest.TestCase):
                 stop_event.set()
                 return result
 
-            with patch('barcode_image_mover_exe.COPY_WORKERS', 1):
-                with patch('barcode_image_mover_exe.shutil.copy2', side_effect=copy_and_stop):
+            with patch('app.core.file_ops.COPY_WORKERS', 1):
+                with patch('app.core.file_ops.shutil.copy2', side_effect=copy_and_stop):
                     copied = app.copy_files_parallel(
                         source, output, ['a.jpg', 'b.jpg'], MemoryLog(), '测试', stop_event
                     )
