@@ -88,7 +88,7 @@ class CoreRegressionTests(unittest.TestCase):
         self.assertTrue(stdout.calls[0].endswith('\n'))
 
     def test_log_writer_open_failure_does_not_abort_logging(self):
-        with patch('barcode_image_mover_exe.open', side_effect=OSError('nope')):
+        with patch('app.services.logger.open', side_effect=OSError('nope')):
             with redirect_stdout(StringIO()) as stdout:
                 writer = app.LogWriter('bad/log.txt')
                 writer.write('still logs')

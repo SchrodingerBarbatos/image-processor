@@ -50,20 +50,11 @@ from app.constants import (
     SHIMMER_STEP, SHIMMER_BAND_WIDTH, RESAMPLE_LANCZOS,
     MODE_NAMES, RESIZE_MODE_MAP, MODE_HELP_TEXT, UI_HELP_TEXT,
 )
+from app.services.logger import LogWriter
+from app.services.icons import _darken, _write_temp_svg, _TEMP_ICON_PATHS, _cleanup_temp_icons
 
-_TEMP_ICON_PATHS = []
 _UNIQUE_PATH_LOCK = threading.Lock()
 _RESERVED_OUTPUT_PATHS = set()
-
-def _cleanup_temp_icons():
-    for p in _TEMP_ICON_PATHS:
-        try:
-            os.remove(p)
-        except OSError:
-            pass
-    _TEMP_ICON_PATHS.clear()
-
-atexit.register(_cleanup_temp_icons)
 
 
 class MainImageResult(NamedTuple):
@@ -81,28 +72,6 @@ class DetailImageResult(NamedTuple):
     compressed: int
     info: Optional[str]
     manual_copy: Optional[str] = None
-
-
-def _darken(hex_color, factor=0.85):
-    """将十六进制颜色按给定因子暗化。"""
-    hex_color = hex_color.lstrip('#')
-    if len(hex_color) == 3:
-        hex_color = ''.join(ch * 2 for ch in hex_color)
-    r, g, b = int(hex_color[:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
-    r, g, b = max(0, int(r * factor)), max(0, int(g * factor)), max(0, int(b * factor))
-    return f'#{r:02x}{g:02x}{b:02x}'
-
-
-def _write_temp_svg(svg_content, prefix):
-    """将 SVG 内容写入临时文件，返回 QSS 可用的文件路径（空字符串表示失败）。"""
-    try:
-        f = tempfile.NamedTemporaryFile(delete=False, suffix=".svg", prefix=prefix)
-        f.write(svg_content.encode("utf-8"))
-        f.close()
-        _TEMP_ICON_PATHS.append(f.name)
-        return f.name.replace("\\", "/")
-    except Exception:
-        return ""
 
 
 def clean_detail_suffix(filename):
@@ -391,48 +360,6 @@ def clean_detail_names_in_dir(detail_dir, log, stop_event=None, manual_source_lo
     return renamed, output_lookup
 
 
-class LogWriter:
-    def __init__(self, log_path=None, gui_callback=None):
-        self.file = None
-        self.gui_callback = gui_callback
-        self._flush_counter = 0
-        self._lock = threading.Lock()
-        if log_path:
-            d = os.path.dirname(log_path)
-            if d:
-                os.makedirs(d, exist_ok=True)
-            try:
-                self.file = open(log_path, 'w', encoding='utf-8')
-            except OSError as e:
-                print(f"[警告] 日志文件无法创建，将只输出到界面/控制台: {e}")
-
-    def write(self, msg, end='\n'):
-        with self._lock:
-            ts = datetime.datetime.now().strftime('%H:%M:%S')
-            line = f'[{ts}] {msg}'
-            sys.stdout.write(line + end)
-            if self.file:
-                self.file.write(line + '\n')
-                self._flush_counter += 1
-                if self._flush_counter >= LOG_FLUSH_INTERVAL:
-                    self.file.flush()
-                    self._flush_counter = 0
-        if self.gui_callback and threading.current_thread() is threading.main_thread():
-            self.gui_callback(line)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        self.close()
-        return False
-
-    def close(self):
-        with self._lock:
-            if self.file:
-                self.file.flush()
-                self.file.close()
-                self.file = None
 
 
 def step1_detail(source_dir, out_dir, log, stop_event=None, files=None):
