@@ -18,7 +18,6 @@ from app.core.file_ops import (
     make_temp_image_path, flatten_to_white_rgb, send_to_manual_and_remove_output,
 )
 
-
 class MainImageResult(NamedTuple):
     filename: str
     ok: bool
@@ -64,6 +63,25 @@ def _resize_fit(img, target, bg_color=(255, 255, 255)):
     return canvas
 
 
+def _standard_output_for_actual_format(ext_lower, actual_format):
+    actual_format = (actual_format or '').upper()
+    if actual_format == 'JPEG':
+        out_ext = ext_lower if ext_lower in {'.jpg', '.jpeg'} else '.jpg'
+        return out_ext, 'JPEG'
+    if actual_format == 'PNG':
+        return '.png', 'PNG'
+    return None, None
+
+
+def _target_output_for_actual_format(ext_lower, actual_format, force_format):
+    out_ext, out_format = _standard_output_for_actual_format(ext_lower, actual_format)
+    if out_format:
+        return out_ext, out_format, False
+    if force_format == 'png':
+        return '.png', 'PNG', True
+    return '.jpg', 'JPEG', True
+
+
 def _process_main_image(main_dir, fn, resize_mode='crop', force_format=None, stop_event=None,
                         manual_dir=None, manual_source_lookup=None):
     resize_fns = {'stretch': _resize_stretch, 'crop': _resize_crop, 'fit': _resize_fit}
@@ -80,30 +98,21 @@ def _process_main_image(main_dir, fn, resize_mode='crop', force_format=None, sto
         with Image.open(fp) as img:
             if stop_event and stop_event.is_set():
                 return MainImageResult(fn, True, None, unresolved_copy)
+            actual_format = img.format
             img = ImageOps.exif_transpose(img)
             w, h = img.size
             needs_resize = (w != TARGET_SIZE[0] or h != TARGET_SIZE[1])
-            target_ext = f".{force_format}" if force_format else None
-            is_standard = ext_lower in {'.jpg', '.jpeg', '.png'}
-            needs_convert = not is_standard
+            out_ext, out_format, needs_convert = _target_output_for_actual_format(
+                ext_lower, actual_format, force_format
+            )
             fsize = os.path.getsize(fp)
             needs_compress = fsize > MAIN_IMAGE_MAX_BYTES
+            if out_ext != ext_lower:
+                needs_convert = True
             if not (needs_resize or needs_convert or needs_compress):
                 return MainImageResult(fn, True, None, unresolved_copy)
             if needs_resize:
                 img = resize_fn(img, TARGET_SIZE)
-            if ext_lower in {'.jpg', '.jpeg'}:
-                out_ext = ext_lower
-                out_format = 'JPEG'
-            elif ext_lower == '.png':
-                out_ext = '.png'
-                out_format = 'PNG'
-            elif force_format:
-                out_ext = target_ext
-                out_format = 'JPEG' if force_format == 'jpg' else 'PNG'
-            else:
-                out_ext = '.jpg'
-                out_format = 'JPEG'
             out_name = name + out_ext
             out_path = os.path.join(main_dir, out_name)
             if out_name != fn and os.path.exists(out_path):
@@ -228,17 +237,19 @@ def _process_detail_image_impl(detail_dir, fn, force_format=None, stop_event=Non
     compressed = 0
     info = None
 
-    is_standard = ext_lower in {'.jpg', '.jpeg', '.png'}
-    if is_standard:
-        target_ext = ext_lower
-    elif force_format:
-        target_ext = '.' + force_format
-    else:
-        target_ext = '.jpg'
-    target_fmt = 'JPEG' if target_ext in {'.jpg', '.jpeg'} else 'PNG'
-    needs_convert = not is_standard
     if stop_event and stop_event.is_set():
         return DetailImageResult(fn, True, None, converted, compressed, info)
+    try:
+        with Image.open(fp) as img:
+            actual_format = img.format
+    except Exception as e:
+        return DetailImageResult(fn, False, f"读取格式 {fn}: {e}", converted, compressed, info)
+
+    target_ext, target_fmt, needs_convert = _target_output_for_actual_format(
+        ext_lower, actual_format, force_format
+    )
+    if target_ext != ext_lower:
+        needs_convert = True
     if needs_convert:
         out_path = None
         tmp_path = None
@@ -249,7 +260,11 @@ def _process_detail_image_impl(detail_dir, fn, force_format=None, stop_event=Non
                 if stop_event and stop_event.is_set():
                     return DetailImageResult(fn, True, None, converted, compressed, info)
                 img = ImageOps.exif_transpose(img)
-                out_path = get_unique_path(os.path.join(detail_dir, name + target_ext), reserve=True)
+                desired_out_path = os.path.join(detail_dir, name + target_ext)
+                if os.path.normcase(desired_out_path) == os.path.normcase(fp):
+                    out_path = desired_out_path
+                else:
+                    out_path = get_unique_path(desired_out_path, reserve=True)
                 tmp_path = make_temp_image_path(detail_dir, os.path.basename(out_path))
                 if img.mode in ('RGBA', 'P', 'LA') and target_fmt == 'JPEG':
                     img = flatten_to_white_rgb(img)

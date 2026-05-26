@@ -342,6 +342,23 @@ class CoreRegressionTests(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(manual_dir, src_name)))
             self.assertFalse(any(name.lower().endswith(('.jpg', '.jpeg')) for name in os.listdir(main_dir)))
 
+    def test_process_main_image_converts_fake_standard_extension_by_actual_format(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            main_dir = os.path.join(tmp, 'main')
+            os.makedirs(main_dir)
+            src_name = 'fake.png'
+            src_path = os.path.join(main_dir, src_name)
+            Image.new('RGB', (120, 80), 'red').save(src_path, 'BMP')
+
+            result = app._process_main_image(main_dir, src_name, resize_mode='fit', force_format='jpg')
+
+            self.assertTrue(result.ok)
+            self.assertEqual(result.filename, 'fake.jpg')
+            self.assertTrue(os.path.exists(os.path.join(main_dir, 'fake.jpg')))
+            self.assertFalse(os.path.exists(src_path))
+            with Image.open(os.path.join(main_dir, 'fake.jpg')) as img:
+                self.assertEqual(img.format, 'JPEG')
+
     def test_process_detail_image_copies_source_original_after_detail_rename_when_still_too_large(self):
         with tempfile.TemporaryDirectory() as tmp:
             source_dir = os.path.join(tmp, 'source')
@@ -399,6 +416,25 @@ class CoreRegressionTests(unittest.TestCase):
             self.assertIsNotNone(result.manual_copy)
             self.assertTrue(os.path.exists(os.path.join(manual_dir, src_name)))
             self.assertFalse(any(name.lower().endswith(('.jpg', '.jpeg')) for name in os.listdir(detail_dir)))
+
+    def test_process_detail_image_converts_fake_standard_extension_by_actual_format(self):
+        for ext in ('.jpg', '.jpeg'):
+            with self.subTest(ext=ext):
+                with tempfile.TemporaryDirectory() as tmp:
+                    detail_dir = os.path.join(tmp, 'detail')
+                    os.makedirs(detail_dir)
+                    src_name = 'fake' + ext
+                    src_path = os.path.join(detail_dir, src_name)
+                    Image.new('RGB', (20, 20), 'blue').save(src_path, 'BMP')
+
+                    result = app._process_detail_image(detail_dir, src_name, force_format='jpg')
+
+                    self.assertTrue(result.ok)
+                    self.assertEqual(result.filename, 'fake.jpg')
+                    self.assertEqual(result.converted, 1)
+                    self.assertTrue(os.path.exists(os.path.join(detail_dir, 'fake.jpg')))
+                    with Image.open(os.path.join(detail_dir, 'fake.jpg')) as img:
+                        self.assertEqual(img.format, 'JPEG')
 
     def test_process_detail_image_returns_named_result(self):
         with tempfile.TemporaryDirectory() as tmp:
