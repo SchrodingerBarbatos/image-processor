@@ -7,7 +7,7 @@ import re
 import threading
 
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QComboBox, QCheckBox, QTextEdit, QFileDialog, QMessageBox,
     QProgressBar, QFrame, QGraphicsDropShadowEffect, QSizePolicy, QGridLayout,
     QTabWidget, QListView,
