@@ -23,6 +23,8 @@ a = Analysis(
         'app.ui.main_window',
         'app.ui.widgets',
         'app.ui.workers',
+        'app.ui.dialogs',
+        'app.ui.styles',
     ],
     hookspath=[],
     hooksconfig={},

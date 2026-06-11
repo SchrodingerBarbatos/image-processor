@@ -10,7 +10,7 @@ from app.core.classifier import split_source_images, dir_has_files, iter_image_f
 from app.core.file_ops import (
     validate_output_dir, get_unique_path, build_manual_source_lookup,
     copy_files_parallel, clean_detail_names_in_dir,
-    _RESERVED_OUTPUT_PATHS,
+    clear_reserved_paths,
 )
 from app.core.excel_reader import step3_read_excel
 from app.core.matcher import step4_match_preview, step4_match
@@ -62,7 +62,7 @@ def run_all(
         raise ValueError(f"源文件夹不存在: {source_dir}")
 
     validate_output_dir(source_dir, output_root)
-    _RESERVED_OUTPUT_PATHS.clear()
+    clear_reserved_paths()
 
     no_excel = mode == 4 or not excel_path
     dry_run = (mode == 2)
@@ -272,5 +272,5 @@ def run_all(
         log.write(traceback.format_exc())
     finally:
         log.close()
-        _RESERVED_OUTPUT_PATHS.clear()
+        clear_reserved_paths()
 

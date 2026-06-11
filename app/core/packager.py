@@ -4,7 +4,7 @@
 import os
 import zipfile
 
-from app.constants import ZIP_SPLIT_BYTES, IMAGE_EXTS
+from app.constants import IMAGE_EXTS
 
 
 def step8_zip(source_dir, target_dir, max_bytes, log, stop_event=None):

@@ -42,6 +42,12 @@ def release_reserved_path(path):
         _RESERVED_OUTPUT_PATHS.discard(path)
 
 
+def clear_reserved_paths():
+    """清空保留路径集合。供流程编排在开始/结束时复位共享状态。"""
+    with _UNIQUE_PATH_LOCK:
+        _RESERVED_OUTPUT_PATHS.clear()
+
+
 def sanitize_csv_cell(value):
     text = "" if value is None else str(value)
     if not text:
