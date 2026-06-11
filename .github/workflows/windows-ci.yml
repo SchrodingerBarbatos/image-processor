@@ -1,0 +1,49 @@
+name: Windows CI
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+
+jobs:
+  test-and-build:
+    name: Test and build EXE
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install PySide6 Pillow pillow-avif-plugin openpyxl pytest pyinstaller
+
+      - name: Compile Python files
+        run: python -m compileall -q .
+
+      - name: Run regression tests
+        run: python -m pytest tests/test_core_regressions.py -v
+
+      - name: Build Windows executable
+        run: pyinstaller --noconfirm --clean barcode_image_mover_exe.spec
+
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-processor-windows
+          path: dist/*.exe
+          if-no-files-found: error
+          retention-days: 14
