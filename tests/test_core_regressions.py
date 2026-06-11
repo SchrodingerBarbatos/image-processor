@@ -38,7 +38,8 @@ class CoreRegressionTests(unittest.TestCase):
             source = os.path.join(tmp, 'images')
             os.makedirs(source)
             suggested = app.suggest_output_dir(source)
-            self.assertEqual(suggested, os.path.join(tmp, 'images_输出'))
+            self.assertEqual(os.path.realpath(os.path.dirname(suggested)), os.path.realpath(tmp))
+            self.assertEqual(os.path.basename(suggested), 'images_输出')
 
     def test_unique_preserve_order_counts_duplicates(self):
         unique, dup = app.unique_preserve_order(['A', 'B', 'A', 'C', 'B', ''])
