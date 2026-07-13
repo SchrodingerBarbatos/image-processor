@@ -65,14 +65,24 @@ def step8_zip(source_dir, target_dir, max_bytes, log, stop_event=None):
                 last_pct = pct
                 log.write(f"  打包进度: {pct}%")
         if zf:
-            zf.close()
-            zf = None
-            current_zip_path = None
+            try:
+                zf.close()
+                # 成功关闭后清空路径，避免 finally 删除已完成的卷
+                zf = None
+                current_zip_path = None
+            except OSError as e:
+                log.write(f"  [警告] 关闭压缩包失败: {e}")
+                # 关闭失败时保留文件，仅清空句柄，避免 finally 误删
+                zf = None
+                current_zip_path = None
         total_zips = idx - 1
         log.write(f"  [完成] 打包完毕，共 {total_zips} 个zip包")
     finally:
         if zf:
-            zf.close()
+            try:
+                zf.close()
+            except OSError:
+                pass
         if current_zip_path and os.path.exists(current_zip_path):
             try:
                 os.remove(current_zip_path)

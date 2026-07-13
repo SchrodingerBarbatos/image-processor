@@ -92,13 +92,18 @@ def step3_read_excel(excel_path, col, log, start_row=None, end_row=None, sheet_n
 
 
 def read_excel_preview(excel_path, sheet_name=None, col_text='A'):
-    """读取 Excel 表头列表和当前列表头。供 UI 后台线程调用。"""
+    """读取 Excel 表头列表和当前列表头。供 UI 后台线程调用。
+
+    sheet_name 指定但不存在时抛出 ValueError，与 step3_read_excel 行为一致。
+    """
     if not excel_path or not os.path.isfile(excel_path):
         return [], None
     import openpyxl
     wb = openpyxl.load_workbook(excel_path, read_only=True, data_only=True)
     try:
-        if sheet_name and sheet_name in wb.sheetnames:
+        if sheet_name:
+            if sheet_name not in wb.sheetnames:
+                raise ValueError(f"工作表 '{sheet_name}' 不存在，可用: {wb.sheetnames}")
             ws = wb[sheet_name]
         else:
             ws = wb.active

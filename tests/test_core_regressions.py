@@ -505,6 +505,155 @@ class CoreRegressionTests(unittest.TestCase):
             with zipfile.ZipFile(zip_path) as zf:
                 self.assertEqual(zf.namelist(), ['nested/a.jpg'])
 
+    def test_resize_fit_handles_extreme_thin_image(self):
+        img = Image.new('RGB', (1, 2000), 'red')
+        out = app._resize_fit(img, (800, 800))
+        self.assertEqual(out.size, (800, 800))
+
+    def test_resize_fit_preserves_alpha_on_white_canvas(self):
+        # 100x50 image scaled 2x into 200x200 canvas → paste at (0, 75)
+        img = Image.new('RGBA', (100, 50), (255, 0, 0, 0))
+        for x in range(40, 60):
+            for y in range(20, 30):
+                img.putpixel((x, y), (0, 255, 0, 255))
+        out = app._resize_fit(img, (200, 200))
+        # transparent source pixel after scale lands inside paste area; must stay white
+        self.assertEqual(out.getpixel((10, 80)), (255, 255, 255))
+        # opaque green center should remain green
+        self.assertEqual(out.getpixel((100, 100)), (0, 255, 0))
+
+    def test_resize_crop_does_not_allocate_huge_intermediate(self):
+        img = Image.new('RGB', (1, 2000), 'red')
+        out = app._resize_crop(img, (800, 800))
+        self.assertEqual(out.size, (800, 800))
+
+    def test_copy_mode_does_not_duplicate_multi_barcode_prefix_match(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, 'source')
+            output = os.path.join(tmp, 'output')
+            os.makedirs(source)
+            Image.new('RGB', (10, 10), 'red').save(os.path.join(source, 'ABC_DEF.jpg'))
+            log = MemoryLog()
+
+            app.step4_match(
+                source, output, ['ABC', 'ABC_DEF'], log,
+                copy_mode=True,
+            )
+
+            images = [n for n in os.listdir(output) if n.lower().endswith(('.jpg', '.png'))]
+            self.assertEqual(images, ['ABC_DEF.jpg'])
+            text = '\n'.join(log.lines)
+            self.assertIn('匹配1张', text)
+            self.assertIn('复制1张', text)
+
+    def test_detail_stop_does_not_send_to_manual_as_still_too_large(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            detail_dir = os.path.join(tmp, 'detail')
+            manual_dir = os.path.join(tmp, 'manual')
+            os.makedirs(detail_dir)
+            os.makedirs(manual_dir)
+            name = 'big.jpg'
+            path = os.path.join(detail_dir, name)
+            Image.new('RGB', (20, 20), 'blue').save(path)
+            stop_event = threading.Event()
+            stop_event.set()
+
+            with patch('app.core.image_processor.DETAIL_IMAGE_MAX_BYTES', 1):
+                result = app._process_detail_image(
+                    detail_dir, name, stop_event=stop_event, manual_dir=manual_dir
+                )
+
+            self.assertTrue(getattr(result, 'aborted', False) or result.ok)
+            self.assertIsNone(result.manual_copy)
+            self.assertTrue(os.path.exists(path))
+            self.assertEqual(os.listdir(manual_dir), [])
+
+    def test_detail_scale_handles_one_pixel_width(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            detail_dir = os.path.join(tmp, 'detail')
+            os.makedirs(detail_dir)
+            name = 'thin.jpg'
+            Image.new('RGB', (1, 5), 'red').save(os.path.join(detail_dir, name))
+            with patch('app.core.image_processor.DETAIL_IMAGE_MAX_BYTES', 1):
+                with patch('app.core.image_processor.DETAIL_JPEG_QUALITIES', (20,)):
+                    with patch('app.core.image_processor.DETAIL_SCALE_FACTORS', (0.9, 0.6)):
+                        result = app._process_detail_image(detail_dir, name)
+            self.assertTrue(result.ok)
+            self.assertIsNone(result.error)
+
+    def test_manual_source_lookup_prefers_full_name_over_stem(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, 'source')
+            os.makedirs(source)
+            jpg = 'SKU.jpg'
+            png = 'SKU.png'
+            Image.new('RGB', (4, 4), 'red').save(os.path.join(source, jpg))
+            Image.new('RGB', (4, 4), 'blue').save(os.path.join(source, png))
+            lookup = app.build_manual_source_lookup(source, [jpg, png])
+            resolved_jpg = app.resolve_manual_source(os.path.join(tmp, 'out', 'SKU.jpg'), lookup)
+            resolved_png = app.resolve_manual_source(os.path.join(tmp, 'out', 'SKU.png'), lookup)
+            self.assertEqual(os.path.basename(resolved_jpg), jpg)
+            self.assertEqual(os.path.basename(resolved_png), png)
+
+    def test_read_excel_preview_rejects_missing_sheet(self):
+        class FakeWorkbook:
+            sheetnames = ['Sheet1']
+            active = object()
+
+            def close(self):
+                pass
+
+        with tempfile.NamedTemporaryFile(suffix='.xlsx') as fake_excel:
+            with patch('openpyxl.load_workbook', return_value=FakeWorkbook()):
+                with self.assertRaises(ValueError):
+                    app.read_excel_preview(fake_excel.name, sheet_name='NoSuchSheet', col_text='A')
+
+    def test_zip_close_failure_does_not_delete_finished_volume(self):
+        import zipfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, 'src')
+            target = os.path.join(tmp, 'zips')
+            os.makedirs(source)
+            with open(os.path.join(source, 'a.jpg'), 'wb') as f:
+                f.write(b'x' * 100)
+            log = MemoryLog()
+            real_zipfile = zipfile.ZipFile
+            close_calls = {'n': 0}
+
+            class FlakyZip(real_zipfile):
+                def close(self):
+                    close_calls['n'] += 1
+                    if close_calls['n'] == 1:
+                        # first close is the successful end-of-loop close
+                        super().close()
+                        raise OSError('simulated close failure after write')
+                    return super().close()
+
+            with patch('app.core.packager.zipfile.ZipFile', FlakyZip):
+                app.step8_zip(source, target, 10_000, log)
+
+            zips = [n for n in os.listdir(target) if n.endswith('.zip')]
+            self.assertEqual(len(zips), 1, f'expected finished zip kept, got {zips}; log={log.lines}')
+
+    def test_run_all_returns_failed_when_no_barcodes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, 'src')
+            output = os.path.join(tmp, 'out')
+            os.makedirs(source)
+            Image.new('RGB', (10, 10), 'red').save(os.path.join(source, 'a.jpg'))
+            excel = os.path.join(tmp, 'list.xlsx')
+            from openpyxl import Workbook
+            wb = Workbook()
+            wb.active['A1'] = 'barcode'
+            wb.save(excel)
+
+            with redirect_stdout(StringIO()):
+                status = app.run_all(
+                    source, output, mode=1, excel_path=excel, col='A', start_row=2
+                )
+            self.assertEqual(status, 'failed')
+
 
 if __name__ == '__main__':
     unittest.main()

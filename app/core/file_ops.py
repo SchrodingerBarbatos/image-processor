@@ -139,8 +139,17 @@ def send_to_manual_and_remove_output(output_path, manual_dir, manual_source_look
 
 
 def add_manual_source_aliases(lookup, current_name, src_path):
-    for key in (current_name, os.path.splitext(current_name)[0]):
-        lookup[os.path.normcase(key)] = src_path
+    """登记当前输出名到源路径的映射。
+
+    完整文件名始终写入；stem 仅在尚未占用时写入，避免同 stem 不同扩展互相覆盖。
+    """
+    if not current_name:
+        return
+    name_key = os.path.normcase(current_name)
+    lookup[name_key] = src_path
+    stem_key = os.path.normcase(os.path.splitext(current_name)[0])
+    if stem_key not in lookup:
+        lookup[stem_key] = src_path
 
 
 def build_manual_source_lookup(source_dir, files, clean_detail_name=False):
@@ -149,7 +158,9 @@ def build_manual_source_lookup(source_dir, files, clean_detail_name=False):
         src_path = os.path.join(source_dir, fn)
         add_manual_source_aliases(lookup, fn, src_path)
         if clean_detail_name:
-            add_manual_source_aliases(lookup, clean_detail_suffix(fn), src_path)
+            cleaned = clean_detail_suffix(fn)
+            if cleaned != fn:
+                add_manual_source_aliases(lookup, cleaned, src_path)
     return lookup
 
 

@@ -53,7 +53,7 @@ def run_all(
     start_row=None,
     end_row=None,
     force_format=None,
-    resize_mode='crop',
+    resize_mode='fit',
     stop_event=None,
     copy_mode=False,
 ):
@@ -123,7 +123,7 @@ def run_all(
 
         if stop_event and stop_event.is_set():
             log.write("\n[停止] 用户中止")
-            return
+            return 'stopped'
 
         # 步骤2
         main_dir = os.path.join(task_root, "主图")
@@ -138,7 +138,7 @@ def run_all(
 
         if stop_event and stop_event.is_set():
             log.write("\n[停止] 用户中止")
-            return
+            return 'stopped'
 
         # 匹配
         if no_excel:
@@ -154,13 +154,12 @@ def run_all(
         else:
             log.write("\n[步骤3] 读取Excel条码...")
             barcodes = step3_read_excel(excel_path, col, log, start_row, end_row, sheet_name, stop_event=stop_event)
-            if not barcodes:
-                log.write("[错误] 未读取到任何条码，程序退出")
-                return
-
             if stop_event and stop_event.is_set():
                 log.write("\n[停止] 用户中止")
-                return
+                return 'stopped'
+            if not barcodes:
+                log.write("[错误] 未读取到任何条码，程序退出")
+                return 'failed'
 
             detail_output = os.path.join(task_root, "详情图提取")
             log.write(f"\n[步骤4] 详情图条码匹配提取（{'复制' if copy_mode else '剪切'}） -> {detail_output}")
@@ -177,7 +176,7 @@ def run_all(
 
             if stop_event and stop_event.is_set():
                 log.write("\n[停止] 用户中止")
-                return
+                return 'stopped'
 
             main_output = os.path.join(task_root, "主图提取")
             log.write(f"\n[步骤5] 主图条码匹配提取（{'复制' if copy_mode else '剪切'}） -> {main_output}")
@@ -194,14 +193,14 @@ def run_all(
 
             if stop_event and stop_event.is_set():
                 log.write("\n[停止] 用户中止")
-                return
+                return 'stopped'
 
         if dry_run:
             log.write("\n" + "=" * 60)
             log.write("  预览结束（未修改任何文件）")
             log.write("  确认无误后重新运行即可")
             log.write("=" * 60)
-            return
+            return 'completed'
 
         # 步骤6+7
         manual_count = 0
@@ -217,7 +216,7 @@ def run_all(
 
             if stop_event and stop_event.is_set():
                 log.write("\n[停止] 用户中止")
-                return
+                return 'stopped'
 
             log.write("\n[步骤7] 详情图格式转换...")
             if dir_has_files(detail_output):
@@ -229,7 +228,7 @@ def run_all(
 
             if stop_event and stop_event.is_set():
                 log.write("\n[停止] 用户中止")
-                return
+                return 'stopped'
         else:
             log.write("\n[步骤6/7] 跳过压缩处理")
 
@@ -249,7 +248,7 @@ def run_all(
 
             if stop_event and stop_event.is_set():
                 log.write("\n[停止] 用户中止")
-                return
+                return 'stopped'
         else:
             log.write("\n[步骤8] 跳过打包")
 
@@ -265,11 +264,13 @@ def run_all(
         if manual_count:
             log.write(f"  需要手动处理: {manual_dir}")
         log.write("=" * 60)
+        return 'completed'
 
     except Exception as e:
         log.write(f"\n[错误] 处理异常: {e}")
         import traceback
         log.write(traceback.format_exc())
+        return 'failed'
     finally:
         log.close()
         clear_reserved_paths()

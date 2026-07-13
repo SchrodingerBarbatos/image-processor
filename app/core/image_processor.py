@@ -23,6 +23,7 @@ class MainImageResult(NamedTuple):
     ok: bool
     error: Optional[str]
     manual_copy: Optional[str] = None
+    aborted: bool = False
 
 
 class DetailImageResult(NamedTuple):
@@ -33,6 +34,7 @@ class DetailImageResult(NamedTuple):
     compressed: int
     info: Optional[str]
     manual_copy: Optional[str] = None
+    aborted: bool = False
 
 
 def _resize_stretch(img, target):
@@ -40,26 +42,31 @@ def _resize_stretch(img, target):
 
 
 def _resize_crop(img, target):
-    tw, th = target
-    w, h = img.size
-    ratio = max(tw / w, th / h)
-    new_w, new_h = int(w * ratio), int(h * ratio)
-    img = img.resize((new_w, new_h), RESAMPLE_LANCZOS)
-    left = (new_w - tw) // 2
-    top = (new_h - th) // 2
-    return img.crop((left, top, left + tw, top + th))
+    """铺满目标尺寸并居中裁剪；用 ImageOps.fit 避免极细长图放大出超大中间图。"""
+    return ImageOps.fit(img, target, method=RESAMPLE_LANCZOS, centering=(0.5, 0.5))
 
 
 def _resize_fit(img, target, bg_color=(255, 255, 255)):
+    """等比例缩放并居中贴到白底画布；保证最小边长 1，并正确处理 alpha。"""
     tw, th = target
     w, h = img.size
+    if w <= 0 or h <= 0:
+        return Image.new('RGB', target, bg_color)
     ratio = min(tw / w, th / h)
-    new_w, new_h = int(w * ratio), int(h * ratio)
-    img = img.resize((new_w, new_h), RESAMPLE_LANCZOS)
+    new_w = max(1, int(round(w * ratio)))
+    new_h = max(1, int(round(h * ratio)))
+    # 避免四舍五入后仍超出目标
+    new_w = min(new_w, tw)
+    new_h = min(new_h, th)
+    resized = img.resize((new_w, new_h), RESAMPLE_LANCZOS)
     canvas = Image.new('RGB', target, bg_color)
     x = (tw - new_w) // 2
     y = (th - new_h) // 2
-    canvas.paste(img, (x, y))
+    if resized.mode in ('RGBA', 'LA') or (resized.mode == 'P' and 'transparency' in resized.info):
+        rgba = resized.convert('RGBA')
+        canvas.paste(rgba, (x, y), mask=rgba.getchannel('A'))
+    else:
+        canvas.paste(resized.convert('RGB') if resized.mode != 'RGB' else resized, (x, y))
     return canvas
 
 
@@ -82,10 +89,10 @@ def _target_output_for_actual_format(ext_lower, actual_format, force_format):
     return '.jpg', 'JPEG', True
 
 
-def _process_main_image(main_dir, fn, resize_mode='crop', force_format=None, stop_event=None,
+def _process_main_image(main_dir, fn, resize_mode='fit', force_format=None, stop_event=None,
                         manual_dir=None, manual_source_lookup=None):
     resize_fns = {'stretch': _resize_stretch, 'crop': _resize_crop, 'fit': _resize_fit}
-    resize_fn = resize_fns.get(resize_mode, _resize_crop)
+    resize_fn = resize_fns.get(resize_mode, _resize_fit)
     fp = os.path.join(main_dir, fn)
     name, ext = os.path.splitext(fn)
     ext_lower = ext.lower()
@@ -94,10 +101,10 @@ def _process_main_image(main_dir, fn, resize_mode='crop', force_format=None, sto
     unresolved_copy = None
     try:
         if stop_event and stop_event.is_set():
-            return MainImageResult(fn, True, None, unresolved_copy)
+            return MainImageResult(fn, True, None, unresolved_copy, aborted=True)
         with Image.open(fp) as img:
             if stop_event and stop_event.is_set():
-                return MainImageResult(fn, True, None, unresolved_copy)
+                return MainImageResult(fn, True, None, unresolved_copy, aborted=True)
             actual_format = img.format
             img = ImageOps.exif_transpose(img)
             w, h = img.size
@@ -135,7 +142,14 @@ def _process_main_image(main_dir, fn, resize_mode='crop', force_format=None, sto
                     quality = MAIN_JPEG_COMPRESS_START_QUALITY
                     while quality >= MAIN_JPEG_MIN_QUALITY:
                         if stop_event and stop_event.is_set():
-                            return MainImageResult(fn, True, None, unresolved_copy)
+                            if tmp_path and os.path.exists(tmp_path):
+                                try:
+                                    os.remove(tmp_path)
+                                except OSError:
+                                    pass
+                            if out_path:
+                                release_reserved_path(out_path)
+                            return MainImageResult(fn, True, None, unresolved_copy, aborted=True)
                         if best_buffer.tell() <= MAIN_IMAGE_MAX_BYTES:
                             break
                         best_buffer = image_to_buffer(img, 'JPEG', quality=quality)
@@ -173,7 +187,7 @@ def _process_main_image(main_dir, fn, resize_mode='crop', force_format=None, sto
         return MainImageResult(fn, False, str(e), unresolved_copy)
 
 
-def step6_process_main(main_dir, log, stop_event=None, resize_mode='crop', force_format=None,
+def step6_process_main(main_dir, log, stop_event=None, resize_mode='fit', force_format=None,
                        manual_dir=None, manual_source_lookup=None):
     from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
     files = sorted(iter_image_files(main_dir))
@@ -238,7 +252,7 @@ def _process_detail_image_impl(detail_dir, fn, force_format=None, stop_event=Non
     info = None
 
     if stop_event and stop_event.is_set():
-        return DetailImageResult(fn, True, None, converted, compressed, info)
+        return DetailImageResult(fn, True, None, converted, compressed, info, aborted=True)
     try:
         with Image.open(fp) as img:
             actual_format = img.format
@@ -258,7 +272,7 @@ def _process_detail_image_impl(detail_dir, fn, force_format=None, stop_event=Non
         try:
             with Image.open(fp) as img:
                 if stop_event and stop_event.is_set():
-                    return DetailImageResult(fn, True, None, converted, compressed, info)
+                    return DetailImageResult(fn, True, None, converted, compressed, info, aborted=True)
                 img = ImageOps.exif_transpose(img)
                 desired_out_path = os.path.join(detail_dir, name + target_ext)
                 if os.path.normcase(desired_out_path) == os.path.normcase(fp):
@@ -305,7 +319,12 @@ def _process_detail_image_impl(detail_dir, fn, force_format=None, stop_event=Non
         tmp = make_temp_image_path(detail_dir, fn)
         with Image.open(fp) as img:
             if stop_event and stop_event.is_set():
-                return DetailImageResult(fn, True, None, converted, compressed, info)
+                if tmp and os.path.exists(tmp):
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
+                return DetailImageResult(fn, True, None, converted, compressed, info, aborted=True)
             img = ImageOps.exif_transpose(img)
             if out_fmt == 'JPEG':
                 best_buffer = image_to_buffer(
@@ -332,7 +351,12 @@ def _process_detail_image_impl(detail_dir, fn, force_format=None, stop_event=Non
             if out_fmt == 'JPEG':
                 for q in DETAIL_JPEG_QUALITIES:
                     if stop_event and stop_event.is_set():
-                        return DetailImageResult(fn, True, None, converted, compressed, info)
+                        if tmp and os.path.exists(tmp):
+                            try:
+                                os.remove(tmp)
+                            except OSError:
+                                pass
+                        return DetailImageResult(fn, True, None, converted, compressed, info, aborted=True)
                     best_buffer = image_to_buffer(img, 'JPEG', quality=q, optimize=True)
                     if best_buffer.tell() <= DETAIL_IMAGE_MAX_BYTES:
                         break
@@ -344,8 +368,15 @@ def _process_detail_image_impl(detail_dir, fn, force_format=None, stop_event=Non
             base_w, base_h = img.size
             for factor in DETAIL_SCALE_FACTORS:
                 if stop_event and stop_event.is_set():
-                    return DetailImageResult(fn, True, None, converted, compressed, info)
-                r_img = img.resize((int(base_w * factor), int(base_h * factor)), RESAMPLE_LANCZOS)
+                    if tmp and os.path.exists(tmp):
+                        try:
+                            os.remove(tmp)
+                        except OSError:
+                            pass
+                    return DetailImageResult(fn, True, None, converted, compressed, info, aborted=True)
+                new_w = max(1, int(base_w * factor))
+                new_h = max(1, int(base_h * factor))
+                r_img = img.resize((new_w, new_h), RESAMPLE_LANCZOS)
                 if out_fmt == 'JPEG':
                     best_buffer = image_to_buffer(r_img, 'JPEG', quality=MAIN_JPEG_QUALITY, optimize=True)
                 else:
@@ -379,14 +410,15 @@ def _process_detail_image(detail_dir, fn, force_format=None, stop_event=None,
     )
     out_path = os.path.join(detail_dir, result.filename)
     still_too_large = (
-        result.ok and result.compressed == 0 and os.path.isfile(out_path)
+        result.ok and not result.aborted and result.compressed == 0
+        and os.path.isfile(out_path)
         and os.path.getsize(out_path) > DETAIL_IMAGE_MAX_BYTES
     )
     if still_too_large:
         unresolved_copy, _ = send_to_manual_and_remove_output(
             out_path, manual_dir, manual_source_lookup
         )
-    elif not result.ok:
+    elif not result.ok and not result.aborted:
         failed_path = os.path.join(detail_dir, result.filename or fn)
         unresolved_copy, _ = send_to_manual_and_remove_output(
             failed_path, manual_dir, manual_source_lookup

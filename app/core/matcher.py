@@ -37,6 +37,7 @@ def step4_match_preview(files, barcodes, log, clean_detail_name=False, stop_even
     unmatched = []
     total = len(barcodes)
     last_pct = -1
+    seen_files = set()
     for idx, barcode in enumerate(barcodes):
         if stop_event and stop_event.is_set():
             log.write("  [停止] 用户中止匹配预览")
@@ -45,8 +46,18 @@ def step4_match_preview(files, barcodes, log, clean_detail_name=False, stop_even
         if not matched:
             unmatched.append(barcode)
             continue
-        matched_total += len(matched)
+        # 同一源文件可能因前缀匹配命中多个条码；全局按文件去重
+        unique_matched = []
         for fn in matched:
+            key = os.path.normcase(fn)
+            if key in seen_files:
+                continue
+            seen_files.add(key)
+            unique_matched.append(fn)
+        if not unique_matched:
+            continue
+        matched_total += len(unique_matched)
+        for fn in unique_matched:
             out_name = clean_detail_suffix(fn) if clean_detail_name else fn
             log.write(f"  [预览] {fn} → {out_name}")
             preview_total += 1
@@ -90,16 +101,18 @@ def step4_match(source_dir, output_dir, barcodes, log, clean_detail_name=False,
         if not matched:
             unmatched.append(barcode)
             continue
-        matched_total += len(matched)
         for fn in matched:
             src = os.path.join(source_dir, fn)
-            if not copy_mode and src in processed_files:
+            src_key = os.path.normcase(os.path.normpath(src))
+            if src_key in processed_files:
                 continue
+            matched_total += 1
             out_name = clean_detail_suffix(fn) if clean_detail_name else fn
             dst = get_unique_path(os.path.join(output_dir, out_name))
             if dry_run:
                 log.write(f"  [预览] {fn} → {out_name}")
                 moved_total += 1
+                processed_files.add(src_key)
             else:
                 try:
                     fsize = os.path.getsize(src)
@@ -108,7 +121,7 @@ def step4_match(source_dir, output_dir, barcodes, log, clean_detail_name=False,
                     else:
                         shutil.move(src, dst)
                     moved_total += 1
-                    processed_files.add(src)
+                    processed_files.add(src_key)
                     src_original = resolve_manual_source(src, manual_source_lookup)
                     add_manual_source_aliases(output_lookup, os.path.basename(dst), src_original)
                     file_log.append({'src': src, 'dst': dst, 'size': fsize,

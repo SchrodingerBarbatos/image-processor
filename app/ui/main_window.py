@@ -355,7 +355,6 @@ class MainWindow(QMainWindow):
         excel_layout.addWidget(excel_hint, 5, 1, 1, 3)
 
         self.le_excel.textChanged.connect(self._debounce_header_preview)
-        self.le_excel.textChanged.connect(self._update_excel_params_enabled)
         self.le_sheet.textChanged.connect(self._debounce_header_preview)
         self.cb_col.currentIndexChanged.connect(self._debounce_header_preview)
         top_layout.addWidget(self.excel_group, 1)
@@ -393,10 +392,11 @@ class MainWindow(QMainWindow):
         self.cb_resize = RoundComboBox()
         self._setup_combo_view(self.cb_resize)
         self.cb_resize.addItems(["crop - 铺满裁剪", "stretch - 拉伸", "fit - 留白缩放"])
+        self.cb_resize.setCurrentIndex(2)  # 默认 fit - 留白缩放
         self.cb_resize.setToolTip("选择主图缩放到 800×800 的方式。")
-        self.cb_resize.setItemData(0, "铺满目标尺寸并裁剪超出部分（默认，适合方形展示图）", Qt.ItemDataRole.ToolTipRole)
+        self.cb_resize.setItemData(0, "铺满目标尺寸并裁剪超出部分（适合方形展示图）", Qt.ItemDataRole.ToolTipRole)
         self.cb_resize.setItemData(1, "直接拉伸/压缩到目标尺寸（图片可能变形）", Qt.ItemDataRole.ToolTipRole)
-        self.cb_resize.setItemData(2, "保持原始比例缩放，空白处填充白色（适合带留白的商品图）", Qt.ItemDataRole.ToolTipRole)
+        self.cb_resize.setItemData(2, "保持原始比例缩放，空白处填充白色（默认，适合带留白的商品图）", Qt.ItemDataRole.ToolTipRole)
         opt_layout.addWidget(self.cb_resize, 2, 1)
 
         opt_layout.addWidget(self._field_label("输出格式"), 3, 0)
@@ -678,6 +678,16 @@ class MainWindow(QMainWindow):
             self.lbl_header_preview.setStyleSheet(f"color: {self._colors['red']}; font-weight: bold;")
             return
 
+        # 取消尚未完成的旧预览任务，避免大表并发 load_workbook
+        for old in list(getattr(self, 'header_workers', [])):
+            if old.isRunning():
+                old.requestInterruption()
+                try:
+                    old.loaded.disconnect()
+                    old.failed.disconnect()
+                except (TypeError, RuntimeError):
+                    pass
+
         self.lbl_header_preview.setText("表头：(读取中...)")
         self.lbl_header_preview.setStyleSheet(f"color: {self._colors['muted']}; font-style: italic;")
         worker = ExcelHeaderWorker(excel_path, sheet_name, col_text)
@@ -741,7 +751,7 @@ class MainWindow(QMainWindow):
         """从日志消息中提取统计计数并更新界面标签。
 
         统计标签与日志格式的约定集中在此方法中，避免散落各处。
-        支持显式 STAT 标签和遗留关键词两种格式。
+        支持显式 STAT 标签和现有 [结果]/[完成] 日志格式。
         """
         if not hasattr(self, 'lbl_success_count'):
             return
@@ -754,16 +764,34 @@ class MainWindow(QMainWindow):
             self.lbl_skipped_count.setText(f"跳过: {m.group(3)}")
             return
 
-        # 遗留关键词匹配（保持与现有日志格式兼容）
-        stat_patterns = [
-            ('lbl_success_count', r'成功[:：]\s*(\d+)', '成功'),
-            ('lbl_failed_count',  r'失败[:：]?\s*(\d+)', '失败'),
-            ('lbl_skipped_count', r'跳过[:：]?\s*(\d+)', '跳过'),
-        ]
-        for attr, pattern, label in stat_patterns:
-            m = re.search(pattern, text)
-            if m:
-                getattr(self, attr).setText(f"{label}: {m.group(1)}")
+        # 匹配 step4 结果行：匹配N张, 复制/剪切N张, 失败N张, 未匹配N个条码
+        m = re.search(
+            r'\[结果\]\s*匹配(\d+)张,\s*(?:复制|剪切)(\d+)张,\s*失败(\d+)张,\s*未匹配(\d+)个条码',
+            text,
+        )
+        if m:
+            matched, moved, failed, unmatched = (int(m.group(i)) for i in range(1, 5))
+            self.lbl_success_count.setText(f"成功: {moved}")
+            self.lbl_failed_count.setText(f"失败: {failed}")
+            self.lbl_skipped_count.setText(f"跳过: {unmatched}")
+            return
+
+        # 主图/详情图进度：processed/total 记为成功进度提示
+        m = re.search(r'(?:主图|详情图)处理进度:\s*(\d+)/(\d+)', text)
+        if m:
+            cur, total = int(m.group(1)), int(m.group(2))
+            self.lbl_success_count.setText(f"成功: {cur}")
+            if total > cur:
+                self.lbl_skipped_count.setText(f"跳过: {total - cur}")
+            return
+
+        # 失败单条日志累加（尽力而为）
+        if re.search(r'\[失败\]', text):
+            try:
+                cur = int(re.search(r'失败:\s*(\d+)', self.lbl_failed_count.text()).group(1))
+            except Exception:
+                cur = 0
+            self.lbl_failed_count.setText(f"失败: {cur + 1}")
 
     def append_log(self, text):
         """追加彩色日志并更新进度条"""
@@ -835,6 +863,12 @@ class MainWindow(QMainWindow):
         if not output:
             QMessageBox.warning(self, "警告", "请选择输出目录！")
             return
+        if self.worker and self.worker.isRunning():
+            QMessageBox.warning(self, "警告", "已有任务正在处理，请先停止或等待完成。")
+            return
+        if not os.path.isdir(source):
+            QMessageBox.warning(self, "警告", f"源文件夹不存在：\n{source}")
+            return
 
         source_norm = os.path.normpath(source)
         output_norm = os.path.normpath(output)
@@ -855,7 +889,7 @@ class MainWindow(QMainWindow):
         mode_map = {"完整流程": 1, "预览模式": 2, "仅分类(无Excel)": 4}
         mode_val = mode_map.get(self.cb_mode.currentText(), 1)
         resize_map = {"crop - 铺满裁剪": "crop", "stretch - 拉伸": "stretch", "fit - 留白缩放": "fit"}
-        resize_val = resize_map.get(self.cb_resize.currentText(), "crop")
+        resize_val = resize_map.get(self.cb_resize.currentText(), "fit")
 
         start_row = self.le_start.text().strip()
         start_row = int(start_row) if start_row.isdigit() else None
@@ -913,7 +947,7 @@ class MainWindow(QMainWindow):
             print("\n>>> 正在发送停止信号，请稍等...")
             self.stop_event.set()
 
-    def _process_finished(self):
+    def _process_finished(self, status='completed'):
         self.progress_bar.stop_animation()
         self._set_processing_controls_enabled(True)
         self.btn_start.setEnabled(True)
@@ -923,17 +957,19 @@ class MainWindow(QMainWindow):
         self.btn_stop.setIcon(QIcon(self._stop_ico_dis_path) if hasattr(self, '_stop_ico_dis_path') and self._stop_ico_dis_path else QIcon())
         self.btn_stop.setIconSize(QSize(18, 18))
 
-        completed = not self.stop_event.is_set()
-        if completed:
+        if status == 'completed':
             self.progress_bar.setValue(100)
             self.lbl_progress_detail.setText("处理完成")
-        else:
+        elif status == 'stopped':
             self.progress_bar.setFormat("已停止 %p%")
             self.lbl_progress_detail.setText("任务已停止")
+        else:
+            self.progress_bar.setFormat("失败 %p%")
+            self.lbl_progress_detail.setText("处理失败")
 
         print("\n[系统] 后台任务已结束。")
         QApplication.alert(self, 0)
-        if completed:
+        if status == 'completed':
             try:
                 if sys.platform == 'win32':
                     winsound.MessageBeep(winsound.MB_ICONASTERISK)
@@ -944,6 +980,8 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'chk_open_output') and self.chk_open_output.isChecked():
                 self._open_output_dir()
             info_box(self, "处理完成", "全部处理完成！\n\n请在输出目录查看处理结果。")
+        elif status == 'failed':
+            QMessageBox.warning(self, "处理失败", "任务未成功完成。\n\n请查看日志区的错误信息。")
 
     def _restore_stdout(self):
         if getattr(self, '_stdout_stream', None) is not None and sys.stdout is self._stdout_stream:
@@ -951,13 +989,6 @@ class MainWindow(QMainWindow):
         self._stdout_stream = None
 
     def closeEvent(self, event):
-        # 清理临时图标文件
-        for p in _TEMP_ICON_PATHS:
-            try:
-                os.remove(p)
-            except OSError:
-                pass
-        _TEMP_ICON_PATHS.clear()
         for header_worker in list(getattr(self, 'header_workers', [])):
             if header_worker.isRunning():
                 header_worker.requestInterruption()
@@ -979,10 +1010,24 @@ class MainWindow(QMainWindow):
                     event.ignore()
                     return
                 self._restore_stdout()
+                self._cleanup_icons_on_exit()
                 event.accept()
             else:
                 event.ignore()
         else:
             self._restore_stdout()
+            self._cleanup_icons_on_exit()
             event.accept()
 
+    def _cleanup_icons_on_exit(self):
+        """仅在确认退出后清理临时图标，避免取消退出后图标失效。"""
+        for p in list(_TEMP_ICON_PATHS):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        _TEMP_ICON_PATHS.clear()
+        try:
+            _cleanup_temp_icons()
+        except Exception:
+            pass
