@@ -7,6 +7,17 @@ import zipfile
 from app.constants import IMAGE_EXTS
 
 
+def _close_zip_keep_path(zf, log=None):
+    """关闭 zip 句柄。无论 close 成功与否，调用方都应丢弃路径引用以免 finally 误删已写完的卷。"""
+    if zf is None:
+        return
+    try:
+        zf.close()
+    except OSError as e:
+        if log is not None:
+            log.write(f"  [警告] 关闭压缩包失败: {e}")
+
+
 def step8_zip(source_dir, target_dir, max_bytes, log, stop_event=None):
     files_info = []
     for root, _, files in os.walk(source_dir):
@@ -43,8 +54,9 @@ def step8_zip(source_dir, target_dir, max_bytes, log, stop_event=None):
                 log.write("  [停止] 用户中止打包")
                 return
             if zf is None or cur_size + fsize > max_bytes:
-                if zf:
-                    zf.close()
+                if zf is not None:
+                    # 分卷切换：当前卷已写完，close 失败也保留文件，勿让 finally 删除
+                    _close_zip_keep_path(zf, log)
                     zf = None
                     current_zip_path = None
                 current_zip_path = os.path.join(target_dir, f'{folder_name}_{idx:03d}.zip')
@@ -64,21 +76,14 @@ def step8_zip(source_dir, target_dir, max_bytes, log, stop_event=None):
             if pct >= last_pct + 20:
                 last_pct = pct
                 log.write(f"  打包进度: {pct}%")
-        if zf:
-            try:
-                zf.close()
-                # 成功关闭后清空路径，避免 finally 删除已完成的卷
-                zf = None
-                current_zip_path = None
-            except OSError as e:
-                log.write(f"  [警告] 关闭压缩包失败: {e}")
-                # 关闭失败时保留文件，仅清空句柄，避免 finally 误删
-                zf = None
-                current_zip_path = None
+        if zf is not None:
+            _close_zip_keep_path(zf, log)
+            zf = None
+            current_zip_path = None
         total_zips = idx - 1
         log.write(f"  [完成] 打包完毕，共 {total_zips} 个zip包")
     finally:
-        if zf:
+        if zf is not None:
             try:
                 zf.close()
             except OSError:

@@ -122,7 +122,8 @@ def _process_main_image(main_dir, fn, resize_mode='fit', force_format=None, stop
                 img = resize_fn(img, TARGET_SIZE)
             out_name = name + out_ext
             out_path = os.path.join(main_dir, out_name)
-            if out_name != fn and os.path.exists(out_path):
+            if out_name != fn:
+                # 始终 reserve，避免并行转换同名目标时互相覆盖
                 out_path = get_unique_path(out_path, reserve=True)
                 out_name = os.path.basename(out_path)
             tmp_path = make_temp_image_path(main_dir, out_name)
@@ -162,6 +163,9 @@ def _process_main_image(main_dir, fn, resize_mode='fit', force_format=None, stop
                     best_buffer = image_to_buffer(p_img, 'PNG', optimize=True)
             write_image_buffer(best_buffer, tmp_path)
             os.replace(tmp_path, out_path)
+            tmp_path = None
+            if out_name != fn:
+                release_reserved_path(out_path)
             if os.path.normcase(out_path) != os.path.normcase(fp) and os.path.exists(fp):
                 try:
                     os.remove(fp)
@@ -290,6 +294,8 @@ def _process_detail_image_impl(detail_dir, fn, force_format=None, stop_event=Non
             os.replace(tmp_path, out_path)
             replace_done = True
             tmp_path = None
+            if os.path.normcase(out_path) != os.path.normcase(os.path.join(detail_dir, old_fn)):
+                release_reserved_path(out_path)
             converted = 1
             fp = out_path
             fn = os.path.basename(out_path)

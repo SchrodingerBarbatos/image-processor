@@ -654,6 +654,78 @@ class CoreRegressionTests(unittest.TestCase):
                 )
             self.assertEqual(status, 'failed')
 
+    def test_zip_volume_rotation_close_failure_keeps_finished_volume(self):
+        import zipfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, 'src')
+            target = os.path.join(tmp, 'zips')
+            os.makedirs(source)
+            # two files force a second volume when max_bytes is tiny
+            for name, size in (('a.jpg', 80), ('b.jpg', 80)):
+                with open(os.path.join(source, name), 'wb') as f:
+                    f.write(b'x' * size)
+            log = MemoryLog()
+            real_zipfile = zipfile.ZipFile
+            close_calls = {'n': 0}
+
+            class FlakyZip(real_zipfile):
+                def close(self):
+                    close_calls['n'] += 1
+                    # first close is volume rotation after a.jpg
+                    if close_calls['n'] == 1:
+                        super().close()
+                        raise OSError('simulated rotation close failure')
+                    return super().close()
+
+            with patch('app.core.packager.zipfile.ZipFile', FlakyZip):
+                app.step8_zip(source, target, 100, log)
+
+            zips = sorted(n for n in os.listdir(target) if n.endswith('.zip'))
+            self.assertGreaterEqual(len(zips), 1, f'expected finished volume kept, got {zips}; log={log.lines}')
+            # first volume written before rotation must still exist
+            self.assertTrue(any(name.endswith('_001.zip') for name in zips), zips)
+
+    def test_stats_parser_handles_preview_result_and_keeps_unmatched_on_progress(self):
+        from app.ui.main_window import MainWindow
+
+        class FakeLabel:
+            def __init__(self, text=''):
+                self._text = text
+
+            def setText(self, text):
+                self._text = text
+
+            def text(self):
+                return self._text
+
+        window = MainWindow.__new__(MainWindow)
+        window.lbl_success_count = FakeLabel('成功: 0')
+        window.lbl_failed_count = FakeLabel('失败: 0')
+        window.lbl_skipped_count = FakeLabel('跳过: 0')
+
+        window._update_stats_from_log(
+            '[结果] 匹配5张, 预览5张, 失败0张, 未匹配1个条码'
+        )
+        self.assertEqual(window.lbl_success_count.text(), '成功: 5')
+        self.assertEqual(window.lbl_failed_count.text(), '失败: 0')
+        self.assertEqual(window.lbl_skipped_count.text(), '跳过: 1')
+
+        window._update_stats_from_log('主图处理进度: 10/100')
+        self.assertEqual(window.lbl_success_count.text(), '成功: 10')
+        # unmatched from result line must not be overwritten by remaining work
+        self.assertEqual(window.lbl_skipped_count.text(), '跳过: 1')
+
+    def test_parallel_main_image_format_conversion_does_not_overwrite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Image.new('RGB', (50, 40), 'red').save(os.path.join(tmp, 'a.webp'), 'WEBP')
+            Image.new('RGB', (50, 40), 'blue').save(os.path.join(tmp, 'a.bmp'), 'BMP')
+            with patch('app.core.image_processor.IMAGE_WORKERS', 2):
+                app.step6_process_main(tmp, MemoryLog(), force_format='jpg')
+            images = sorted(n for n in os.listdir(tmp) if n.lower().endswith(('.jpg', '.jpeg', '.png', '.webp', '.bmp')))
+            self.assertEqual(len(images), 2, images)
+            self.assertTrue(any(n.startswith('a') and n.lower().endswith(('.jpg', '.jpeg')) for n in images))
+
 
 if __name__ == '__main__':
     unittest.main()

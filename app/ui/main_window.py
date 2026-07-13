@@ -764,9 +764,9 @@ class MainWindow(QMainWindow):
             self.lbl_skipped_count.setText(f"跳过: {m.group(3)}")
             return
 
-        # 匹配 step4 结果行：匹配N张, 复制/剪切N张, 失败N张, 未匹配N个条码
+        # 匹配 step4 结果行：匹配N张, 复制/剪切/预览N张, 失败N张, 未匹配N个条码
         m = re.search(
-            r'\[结果\]\s*匹配(\d+)张,\s*(?:复制|剪切)(\d+)张,\s*失败(\d+)张,\s*未匹配(\d+)个条码',
+            r'\[结果\]\s*匹配(\d+)张,\s*(?:复制|剪切|预览)(\d+)张,\s*失败(\d+)张,\s*未匹配(\d+)个条码',
             text,
         )
         if m:
@@ -776,13 +776,11 @@ class MainWindow(QMainWindow):
             self.lbl_skipped_count.setText(f"跳过: {unmatched}")
             return
 
-        # 主图/详情图进度：processed/total 记为成功进度提示
+        # 主图/详情图进度只更新成功数，勿把剩余任务量写成“跳过”
         m = re.search(r'(?:主图|详情图)处理进度:\s*(\d+)/(\d+)', text)
         if m:
-            cur, total = int(m.group(1)), int(m.group(2))
+            cur = int(m.group(1))
             self.lbl_success_count.setText(f"成功: {cur}")
-            if total > cur:
-                self.lbl_skipped_count.setText(f"跳过: {total - cur}")
             return
 
         # 失败单条日志累加（尽力而为）
