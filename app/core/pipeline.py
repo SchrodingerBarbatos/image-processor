@@ -3,6 +3,7 @@
 
 import os
 import datetime
+import tempfile
 
 from app.constants import MODE_NAMES, RESIZE_MODE_MAP, MANUAL_REVIEW_DIR_NAME, ZIP_SPLIT_BYTES
 from app.services.logger import LogWriter
@@ -236,19 +237,34 @@ def run_all(
         if manual_count:
             log.write(f"  [提醒] {manual_count} 张图片压缩后仍未达到大小要求，原图已复制到: {manual_dir}")
 
+        zip_dir = None
         if do_zip:
-            log.write(f"\n[步骤8] 打包zip（每卷≤{ZIP_SPLIT_BYTES}字节）...")
-            zip_dir = os.path.join(task_root, "压缩包")
-            if dir_has_files(main_output):
-                log.write("  --- 打包主图提取 ---")
-                step8_zip(main_output, zip_dir, ZIP_SPLIT_BYTES, log, stop_event=stop_event)
-            if dir_has_files(detail_output):
-                log.write("  --- 打包详情图提取 ---")
-                step8_zip(detail_output, zip_dir, ZIP_SPLIT_BYTES, log, stop_event=stop_event)
+            log.write(f"\n[步骤8] 打包zip（每卷目标≤{ZIP_SPLIT_BYTES}字节）...")
+            with tempfile.TemporaryDirectory(prefix='.packaging-', dir=task_root) as staging:
+                staged_zip_dir = os.path.join(staging, '压缩包')
+                archive_count = 0
+                for label, output_dir in (("主图", main_output), ("详情图", detail_output)):
+                    if stop_event is not None and stop_event.is_set():
+                        log.write("\n[停止] 用户中止；未发布压缩包")
+                        return 'stopped'
+                    if dir_has_files(output_dir):
+                        log.write(f"  --- 打包{label} ---")
+                        try:
+                            archive_count += step8_zip(
+                                output_dir, staged_zip_dir, ZIP_SPLIT_BYTES, log, stop_event=stop_event
+                            )
+                        except OSError as error:
+                            raise OSError(f"{label}打包失败；未发布本次压缩包: {error}") from error
 
-            if stop_event and stop_event.is_set():
-                log.write("\n[停止] 用户中止")
-                return 'stopped'
+                if stop_event is not None and stop_event.is_set():
+                    log.write("\n[停止] 用户中止；未发布压缩包")
+                    return 'stopped'
+                if archive_count:
+                    zip_dir = os.path.join(task_root, "压缩包")
+                    os.replace(staged_zip_dir, zip_dir)
+                    log.write(f"  [完成] 已发布 {archive_count} 个zip包")
+                else:
+                    log.write("  [信息] 本次没有可打包的图片")
         else:
             log.write("\n[步骤8] 跳过打包")
 
@@ -257,8 +273,8 @@ def run_all(
         log.write("  全部处理完成！")
         log.write(f"  主图输出: {main_output}")
         log.write(f"  详情图输出: {detail_output}")
-        if do_zip:
-            log.write(f"  zip包: {os.path.join(task_root, '压缩包')}")
+        if zip_dir:
+            log.write(f"  zip包: {zip_dir}")
         if log_path:
             log.write(f"  日志文件: {log_path}")
         if manual_count:
