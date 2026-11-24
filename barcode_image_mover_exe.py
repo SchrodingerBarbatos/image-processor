@@ -19,7 +19,6 @@ import csv
 import atexit
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from typing import NamedTuple, Optional
-import winsound
 from PIL import Image, ImageOps
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QHBoxLayout, QLabel, QLineEdit,

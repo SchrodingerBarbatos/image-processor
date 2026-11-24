@@ -16,7 +16,6 @@ from PySide6.QtCore import Qt, QTimer, QSize, QRectF
 from PySide6.QtGui import (
     QTextCursor, QTextCharFormat, QColor, QFont, QIcon, QPixmap,
 )
-import winsound
 
 from app.constants import (
     DEBOUNCE_MS, LOG_MAX_BLOCK_COUNT, MODE_HELP_TEXT, RESIZE_MODE_MAP, UI_HELP_TEXT,
@@ -970,6 +969,8 @@ class MainWindow(QMainWindow):
         if status == 'completed':
             try:
                 if sys.platform == 'win32':
+                    import winsound
+
                     winsound.MessageBeep(winsound.MB_ICONASTERISK)
                 else:
                     QApplication.beep()

@@ -608,7 +608,7 @@ class CoreRegressionTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     app.read_excel_preview(fake_excel.name, sheet_name='NoSuchSheet', col_text='A')
 
-    def test_zip_close_failure_does_not_delete_finished_volume(self):
+    def test_zip_close_failure_publishes_no_volumes(self):
         import zipfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -631,10 +631,11 @@ class CoreRegressionTests(unittest.TestCase):
                     return super().close()
 
             with patch('app.core.packager.zipfile.ZipFile', FlakyZip):
-                app.step8_zip(source, target, 10_000, log)
+                with self.assertRaisesRegex(OSError, 'simulated close failure'):
+                    app.step8_zip(source, target, 10_000, log)
 
-            zips = [n for n in os.listdir(target) if n.endswith('.zip')]
-            self.assertEqual(len(zips), 1, f'expected finished zip kept, got {zips}; log={log.lines}')
+            self.assertEqual(os.listdir(target), [])
+            self.assertFalse(any('[完成]' in line for line in log.lines))
 
     def test_run_all_returns_failed_when_no_barcodes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -654,7 +655,7 @@ class CoreRegressionTests(unittest.TestCase):
                 )
             self.assertEqual(status, 'failed')
 
-    def test_zip_volume_rotation_close_failure_keeps_finished_volume(self):
+    def test_zip_second_volume_close_failure_publishes_no_volumes(self):
         import zipfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -671,20 +672,101 @@ class CoreRegressionTests(unittest.TestCase):
 
             class FlakyZip(real_zipfile):
                 def close(self):
-                    close_calls['n'] += 1
-                    # first close is volume rotation after a.jpg
-                    if close_calls['n'] == 1:
+                    if self.fp is not None:
+                        close_calls['n'] += 1
+                    # The first volume closes normally; fail after the second is written.
+                    if self.fp is not None and close_calls['n'] == 2:
                         super().close()
                         raise OSError('simulated rotation close failure')
                     return super().close()
 
             with patch('app.core.packager.zipfile.ZipFile', FlakyZip):
-                app.step8_zip(source, target, 100, log)
+                with self.assertRaisesRegex(OSError, 'simulated rotation close failure'):
+                    app.step8_zip(source, target, 100, log)
 
-            zips = sorted(n for n in os.listdir(target) if n.endswith('.zip'))
-            self.assertGreaterEqual(len(zips), 1, f'expected finished volume kept, got {zips}; log={log.lines}')
-            # first volume written before rotation must still exist
-            self.assertTrue(any(name.endswith('_001.zip') for name in zips), zips)
+            self.assertEqual(os.listdir(target), [])
+            self.assertFalse(any('[完成]' in line for line in log.lines))
+
+    def test_run_all_zip_write_failure_returns_failed_and_publishes_no_archives(self):
+        import zipfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'src'
+            output = Path(tmp) / 'out'
+            source.mkdir()
+            for filename in ('123.jpg', '123_详情图.jpg'):
+                Image.new('RGB', (10, 10), 'red').save(source / filename)
+            original_write = zipfile.ZipFile.write
+            writes = []
+
+            def fail_on_detail(archive, filename, arcname=None):
+                writes.append(filename)
+                if Path(filename).parent.name == '详情图':
+                    # Simulate a partially written member, not just a failed open.
+                    original_write(archive, filename, arcname)
+                    raise OSError('simulated entry write failure')
+                return original_write(archive, filename, arcname)
+
+            with patch('app.core.packager.zipfile.ZipFile.write', fail_on_detail):
+                with redirect_stdout(StringIO()):
+                    status = app.run_all(str(source), str(output), mode=1)
+
+            self.assertEqual(status, 'failed')
+            self.assertEqual([Path(filename).parent.name for filename in writes], ['主图', '详情图'])
+            task, = output.iterdir()
+            self.assertTrue((task / '主图' / '123.jpg').is_file())
+            self.assertFalse((task / '压缩包').exists())
+            self.assertFalse(list(task.glob('.packaging-*')))
+            log_path, = task.glob('处理日志_*.txt')
+            log = log_path.read_text(encoding='utf-8')
+            self.assertIn('simulated entry write failure', log)
+            self.assertNotIn('全部处理完成', log)
+
+    def test_run_all_success_publishes_both_image_groups(self):
+        import zipfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'src'
+            output = Path(tmp) / 'out'
+            source.mkdir()
+            for filename in ('123.jpg', '123_详情图.jpg'):
+                Image.new('RGB', (10, 10), 'red').save(source / filename)
+            with redirect_stdout(StringIO()):
+                status = app.run_all(str(source), str(output), mode=1)
+
+            self.assertEqual(status, 'completed')
+            task, = output.iterdir()
+            archives = sorted((task / '压缩包').glob('*.zip'))
+            self.assertEqual({path.name for path in archives}, {'主图_001.zip', '详情图_001.zip'})
+            for path in archives:
+                with zipfile.ZipFile(path) as archive:
+                    self.assertEqual(archive.namelist(), ['123.jpg'])
+                    self.assertIsNone(archive.testzip())
+
+    def test_cancelled_zip_publishes_no_archives(self):
+        import zipfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'src'
+            target = Path(tmp) / 'zips'
+            source.mkdir()
+            for name in ('a.jpg', 'b.jpg'):
+                (source / name).write_bytes(b'x' * 80)
+            stopped = threading.Event()
+            original_write = zipfile.ZipFile.write
+
+            def stop_after_first_write(archive, filename, arcname=None):
+                original_write(archive, filename, arcname)
+                stopped.set()
+
+            with patch('app.core.packager.zipfile.ZipFile.write', stop_after_first_write):
+                count = app.step8_zip(source, target, 100, MemoryLog(), stop_event=stopped)
+
+            self.assertEqual(count, 0)
+            self.assertEqual(list(target.iterdir()), [])
 
     def test_stats_parser_handles_preview_result_and_keeps_unmatched_on_progress(self):
         from app.ui.main_window import MainWindow
